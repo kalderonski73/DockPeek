@@ -1,0 +1,9 @@
+# Build output
+.build/
+DockPeek.app/
+
+# Claude Code project data
+.claude/
+
+# macOS
+.DS_Store

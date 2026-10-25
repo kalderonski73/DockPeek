@@ -116,12 +116,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         let close = menu.addItem(withTitle: "Close Window", action: #selector(menuCloseWindow(_:)), keyEquivalent: "")
         close.representedObject = w
+        menu.items.forEach { $0.target = self }
+        // Finder always keeps running, so it gets no quit options.
+        if bid == "com.apple.finder" { return menu }
         menu.addItem(.separator())
         let toggle = menu.addItem(withTitle: "Quit \(name) When Closing Its Last Window",
                                   action: #selector(menuToggleQuit(_:)), keyEquivalent: "")
         toggle.representedObject = bid
         toggle.state = shouldQuit(bid) ? .on : .off
-        toggle.isEnabled = bid != "com.apple.finder"
         if quitOverrides[bid] != nil {
             let reset = menu.addItem(withTitle: "Use Default for \(name)", action: #selector(menuResetApp(_:)), keyEquivalent: "")
             reset.representedObject = bid
@@ -129,7 +131,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         let quit = menu.addItem(withTitle: "Quit \(name) Now", action: #selector(menuQuitNow(_:)), keyEquivalent: "")
         quit.representedObject = w.pid
-        quit.isEnabled = bid != "com.apple.finder"
         menu.items.forEach { $0.target = self }
         return menu
     }

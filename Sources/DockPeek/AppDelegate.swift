@@ -12,6 +12,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let panel = PreviewPanel()
     private let overlay = PeekOverlay()
     private let keyTap = KeyboardTap()
+    private var quitItem: NSMenuItem!
+    private var pendingQuitPID: pid_t?     // quit this app once its last window is gone
+
+    /// Default for apps without their own choice.
+    private var quitDefault: Bool {
+        get { UserDefaults.standard.bool(forKey: "quitOnLastClose") }
+        set { UserDefaults.standard.set(newValue, forKey: "quitOnLastClose") }
+    }
+    /// Per-app choices, keyed by bundle id.
+    private var quitOverrides: [String: Bool] {
+        get { UserDefaults.standard.dictionary(forKey: "quitOverrides") as? [String: Bool] ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: "quitOverrides") }
+    }
+    private func shouldQuit(_ bundleID: String?) -> Bool {
+        guard let bundleID, bundleID != "com.apple.finder" else { return false }
+        return quitOverrides[bundleID] ?? quitDefault
+    }
     private var keyboardAnchor: NSPoint?   // mouse position when keyboard navigation started
     private var suppressPID: pid_t?        // app dismissed with Esc; don't reopen until the mouse leaves its icon
     private var refreshTimer: Timer?
@@ -45,11 +62,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.hide()
         }
         panel.onClose = { [weak self] w in
+            if let self, self.panel.windowCount == 1,
+               self.shouldQuit(NSRunningApplication(processIdentifier: w.pid)?.bundleIdentifier) {
+                self.pendingQuitPID = w.pid
+            }
             WindowProvider.close(w)
             self?.cancelPeek()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self?.refreshNow() }
         }
         keyTap.handler = { [weak self] code, flags in self?.handleKey(code, flags) ?? false }
+        panel.menuProvider = { [weak self] w in self?.cardMenu(for: w) }
         panel.onHover = { [weak self] w, entered in self?.hoverCard(w, entered: entered) }
         startMouseMonitoring()
     }
@@ -63,6 +85,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "Open Accessibility Settings", action: #selector(openAX), keyEquivalent: "")
         menu.addItem(withTitle: "Open Screen Recording Settings", action: #selector(openSR), keyEquivalent: "")
         menu.addItem(.separator())
+        quitItem = menu.addItem(withTitle: "Quit Apps When Closing Their Last Window (default)", action: #selector(toggleQuitOnLast), keyEquivalent: "")
+        quitItem.state = quitDefault ? .on : .off
+        menu.addItem(withTitle: "Reset Per-App Choices", action: #selector(resetOverrides), keyEquivalent: "")
         loginItem = menu.addItem(withTitle: "Launch at Login", action: #selector(toggleLogin), keyEquivalent: "")
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(.separator())
@@ -75,6 +100,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         _ = AXIsProcessTrustedWithOptions(opts)
         if !CGPreflightScreenCaptureAccess() { CGRequestScreenCaptureAccess() }
+    }
+
+    @objc private func toggleQuitOnLast() {
+        quitDefault.toggle()
+        quitItem.state = quitDefault ? .on : .off
+    }
+
+    @objc private func resetOverrides() { quitOverrides = [:] }
+
+    // Right-click menu on a card: per-app "quit on last window" choice.
+    private func cardMenu(for w: WindowPreview) -> NSMenu? {
+        guard let app = NSRunningApplication(processIdentifier: w.pid), let bid = app.bundleIdentifier else { return nil }
+        let name = app.localizedName ?? "App"
+        let menu = NSMenu()
+        let close = menu.addItem(withTitle: "Close Window", action: #selector(menuCloseWindow(_:)), keyEquivalent: "")
+        close.representedObject = w
+        menu.addItem(.separator())
+        let toggle = menu.addItem(withTitle: "Quit \(name) When Closing Its Last Window",
+                                  action: #selector(menuToggleQuit(_:)), keyEquivalent: "")
+        toggle.representedObject = bid
+        toggle.state = shouldQuit(bid) ? .on : .off
+        toggle.isEnabled = bid != "com.apple.finder"
+        if quitOverrides[bid] != nil {
+            let reset = menu.addItem(withTitle: "Use Default for \(name)", action: #selector(menuResetApp(_:)), keyEquivalent: "")
+            reset.representedObject = bid
+        }
+        menu.addItem(.separator())
+        let quit = menu.addItem(withTitle: "Quit \(name) Now", action: #selector(menuQuitNow(_:)), keyEquivalent: "")
+        quit.representedObject = w.pid
+        quit.isEnabled = bid != "com.apple.finder"
+        menu.items.forEach { $0.target = self }
+        return menu
+    }
+
+    @objc private func menuCloseWindow(_ s: NSMenuItem) { if let w = s.representedObject as? WindowPreview { panel.onClose?(w) } }
+    @objc private func menuToggleQuit(_ s: NSMenuItem) {
+        guard let bid = s.representedObject as? String else { return }
+        var o = quitOverrides; o[bid] = !shouldQuit(bid); quitOverrides = o
+    }
+    @objc private func menuResetApp(_ s: NSMenuItem) {
+        guard let bid = s.representedObject as? String else { return }
+        var o = quitOverrides; o[bid] = nil; quitOverrides = o
+    }
+    @objc private func menuQuitNow(_ s: NSMenuItem) {
+        guard let pid = s.representedObject as? pid_t else { return }
+        NSRunningApplication(processIdentifier: pid)?.terminate()
+        hide()
     }
 
     @objc private func toggleLogin() {
@@ -201,7 +273,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let previews = await WindowProvider.previews(for: app)
             refreshing = false
             guard shownPID == pid else { return }
-            if previews.isEmpty { hide(); return }
+            if previews.isEmpty {
+                // Graceful quit (the app may still ask to save); not a force-quit.
+                if pendingQuitPID == pid { app.terminate() }
+                hide()
+                return
+            }
             if panel.update(previews) { cancelPeek() }
         }
     }
@@ -265,6 +342,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func hide() {
+        pendingQuitPID = nil
         keyTap.stop()
         keyboardAnchor = nil
         refreshTimer?.invalidate()

@@ -52,6 +52,7 @@ enum WindowProvider {
         let pid = app.processIdentifier
         let appName = app.localizedName ?? ""
         let (real, minimized) = axWindowInfo(pid: pid)
+        let axTrusted = AXIsProcessTrusted()   // if AX works, an empty list means "no windows"
         guard CGPreflightScreenCaptureAccess(),
               let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         else {
@@ -60,7 +61,7 @@ enum WindowProvider {
         let windows = content.windows.filter {
             $0.owningApplication?.processID == pid && $0.windowLayer == 0
                 && $0.frame.width > 80 && $0.frame.height > 60
-                && (real.isEmpty || real.contains($0.windowID))
+                && (!axTrusted || real.contains($0.windowID))
         }
         return await withTaskGroup(of: (Int, WindowPreview).self) { group in
             for (i, w) in windows.enumerated() {
@@ -108,7 +109,7 @@ enum WindowProvider {
                   let b = d[kCGWindowBounds as String] as? [String: CGFloat],
                   (b["Width"] ?? 0) > 80, (b["Height"] ?? 0) > 60,
                   let id = d[kCGWindowNumber as String] as? CGWindowID,
-                  real.isEmpty || real.contains(id) else { return nil }
+                  !AXIsProcessTrusted() || real.contains(id) else { return nil }
             let title = (d[kCGWindowName as String] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? name
             return WindowPreview(id: id, pid: pid, title: title, image: nil, frame: .zero, onScreen: false,
                                  minimized: minimized.contains(id))

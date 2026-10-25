@@ -34,6 +34,7 @@ class ItemView: NSView {
     var onClick: ((WindowPreview) -> Void)?
     var onClose: ((WindowPreview) -> Void)?
     var onHover: ((WindowPreview, Bool) -> Void)?
+    var menuProvider: ((WindowPreview) -> NSMenu?)?
     let closeButton = CloseButton()
 
     var hovering = false { didSet { updateChrome() } }
@@ -71,6 +72,7 @@ class ItemView: NSView {
     override func mouseEntered(with event: NSEvent) { hovering = true; onHover?(preview, true) }
     override func mouseExited(with event: NSEvent) { hovering = false; onHover?(preview, false) }
     override func mouseDown(with event: NSEvent) { onClick?(preview) }
+    override func menu(for event: NSEvent) -> NSMenu? { menuProvider?(preview) }
     override func otherMouseDown(with event: NSEvent) { if event.buttonNumber == 2 { onClose?(preview) } }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
@@ -178,6 +180,7 @@ final class PreviewPanel: NSPanel {
     var onSelect: ((WindowPreview) -> Void)?
     var onClose: ((WindowPreview) -> Void)?
     var onHover: ((WindowPreview, Bool) -> Void)?
+    var menuProvider: ((WindowPreview) -> NSMenu?)?
 
     private var items: [ItemView] = []
     private var currentIDs: [CGWindowID] = []
@@ -187,6 +190,8 @@ final class PreviewPanel: NSPanel {
     private(set) var selectedIndex: Int?
     private var selectedID: CGWindowID?
     private var selectedByKeyboard = false
+
+    var windowCount: Int { items.count }
 
     var selectedPreview: WindowPreview? {
         guard let i = selectedIndex, items.indices.contains(i) else { return nil }
@@ -278,6 +283,7 @@ final class PreviewPanel: NSPanel {
             v.onClick = { [weak self] p in self?.onSelect?(p) }
             v.onClose = { [weak self] p in self?.onClose?(p) }
             v.onHover = { [weak self] p, e in self?.hoverChanged(p, e) }
+            v.menuProvider = { [weak self] p in self?.menuProvider?(p) }
         }
         items = views
         currentIDs = previews.map(\.id)
